@@ -5,6 +5,11 @@ extends RefCounted
 ## when its power is full. You, the alchemist, hold ingredients drawn from your
 ## bag, put 1-3 in the flask and either HAND IT OVER (the hero uses it the next
 ## time they're free) or put it in the LOW-HP SLOT (used when HP drops low).
+## Each ingredient has a MAIN effect (always counts, stacks with copies) and a
+## SECOND effect (only counts if a different ingredient in the flask has the
+## same effect). The FIRST effect in the flask decides the target: hero-side
+## effects mean the hero drinks it, enemy-side ones mean they throw it - and
+## every effect lands on that target, so a bad mix can heal the enemy.
 ## Ingredients trickle in one at a time; a slowly filling meter lets you press
 ## REDRAW to swap your whole hand. Used ingredients reshuffle back into the bag.
 ## All numbers come from data/fight.json and are placeholders.
@@ -34,11 +39,11 @@ func setup(data: Dictionary, seed_value: int) -> void:
 	d = data
 	rng.seed = seed_value
 	var h: Dictionary = d["hero"]
-	hero = {"hp": float(h["hp"]), "max": float(h["hp"]), "power": 0.0,
+	hero = {"hp": float(h["hp"]), "max": float(h["hp"]), "power": 0.0, "slow": 0.0,
 		"cd": float(h["attack_every"]), "busy": 0.0, "frame": "idle", "frame_t": 0.0}
 	var e: Dictionary = d["enemy"]
 	enemy = {"hp": float(e["hp"]), "max": float(e["hp"]), "cd": float(e["attack_every"]),
-		"count": 0, "winding": false, "wind_t": 0.0, "frame": "idle", "frame_t": 0.0}
+		"count": 0, "slow": 0.0, "winding": false, "wind_t": 0.0, "frame": "idle", "frame_t": 0.0}
 	draw_pile = d["bag"].duplicate()
 	_shuffle(draw_pile)
 	for i in int(d["start_hand"]):
@@ -108,18 +113,45 @@ func redraw() -> bool:
 	return true
 
 
-## What the flask would make right now: {heal, damage, power}.
+const EFFECTS := ["heal", "power", "damage", "slow"]
+
+
+## What the flask would make right now: {target: "hero"/"enemy"/"", fx:
+## {effect: amount}, second_on: [bool per flask ingredient]}.
 func flask_effects(ids: Array = flask) -> Dictionary:
-	var fx := {"heal": 0.0, "damage": 0.0, "power": 0.0}
-	for id in ids:
-		var ing: Dictionary = d["ingredients"][id]
-		fx[ing["effect"]] += float(ing["amount"])
-	return fx
+	var fx := {}
+	for e in EFFECTS:
+		fx[e] = 0.0
+	var second_on: Array = []
+	for i in ids.size():
+		var ing: Dictionary = d["ingredients"][ids[i]]
+		fx[ing["main"][0]] += float(ing["main"][1])
+		var on := _second_matches(ids, i)
+		second_on.append(on)
+		if on:
+			fx[ing["second"][0]] += float(ing["second"][1])
+	var target := ""
+	if not ids.is_empty():
+		target = String(d["effects"][d["ingredients"][ids[0]]["main"][0]]["side"])
+	return {"target": target, "fx": fx, "second_on": second_on}
+
+
+## Does another, different ingredient in the flask share ids[i]'s second effect?
+func _second_matches(ids: Array, i: int) -> bool:
+	var want: String = d["ingredients"][ids[i]]["second"][0]
+	for j in ids.size():
+		if ids[j] == ids[i]:
+			continue
+		var other: Dictionary = d["ingredients"][ids[j]]
+		if other["main"][0] == want or other["second"][0] == want:
+			return true
+	return false
 
 
 func _brew() -> Dictionary:
 	var p := flask_effects()
 	p["ings"] = flask.duplicate()
+	p["second_on"] = p["second_on"].duplicate()
 	discard.append_array(flask)
 	flask.clear()
 	return p
@@ -153,7 +185,7 @@ func _hero_step(dt: float) -> void:
 	var sp: Dictionary = d["special_power"]
 	hero["power"] = minf(float(sp["max"]), hero["power"] + float(sp["per_second"]) * dt)
 	hero["busy"] -= dt
-	hero["cd"] -= dt
+	hero["cd"] -= dt * _speed(hero, dt)
 	if hero["busy"] > 0.0:
 		return
 	if _check_low_slot():
@@ -182,26 +214,49 @@ func _check_low_slot() -> bool:
 	return false
 
 
-## The hero drinks (or, for a pure damage potion, throws) a potion.
+## The hero uses a potion: drinks it if its target is the hero, throws it if
+## it's the enemy. Every effect lands on that target.
 func _use(p: Dictionary, from: String = "") -> void:
 	hero["busy"] = float(d["hero"]["drink_time"])
-	var verb := "drinks"
-	if p["heal"] == 0.0 and p["power"] == 0.0:
-		verb = "throws"
-	events.append({"kind": "use", "text": verb + (" (" + from + ")" if from != "" else "")})
-	if p["heal"] > 0.0:
-		var before: float = hero["hp"]
-		hero["hp"] = minf(hero["max"], hero["hp"] + p["heal"])
-		events.append({"kind": "heal", "amount": hero["hp"] - before, "wasted": p["heal"] - (hero["hp"] - before)})
-	if p["power"] > 0.0:
-		hero["power"] = minf(float(d["special_power"]["max"]), hero["power"] + p["power"])
-		events.append({"kind": "power", "amount": p["power"]})
-	if p["damage"] > 0.0:
-		_hurt_enemy(p["damage"], "")
+	var on_hero: bool = p["target"] == "hero"
+	var verb := "throws it"
+	if on_hero:
+		verb = "drinks"
+	events.append({"kind": "use", "text": verb + (" (" + from + ")" if from != "" else ""), "on": p["target"]})
+	var who: Dictionary = enemy
+	if on_hero:
+		who = hero
+	var fx: Dictionary = p["fx"]
+	if fx["heal"] > 0.0:
+		var before: float = who["hp"]
+		who["hp"] = minf(who["max"], who["hp"] + fx["heal"])
+		events.append({"kind": "heal", "on": p["target"], "amount": who["hp"] - before, "wasted": fx["heal"] - (who["hp"] - before)})
+	if fx["power"] > 0.0:
+		if on_hero:
+			hero["power"] = minf(float(d["special_power"]["max"]), hero["power"] + fx["power"])
+		# PLACEHOLDER: the enemy has no special, so power thrown at it does nothing
+		events.append({"kind": "power", "on": p["target"], "amount": fx["power"]})
+	if fx["slow"] > 0.0:
+		who["slow"] += fx["slow"]
+		events.append({"kind": "slow", "on": p["target"], "amount": fx["slow"]})
+	if fx["damage"] > 0.0:
+		if on_hero:
+			_hurt_hero(fx["damage"], "own potion", false)
+		else:
+			_hurt_enemy(fx["damage"], "")
+
+
+## Time multiplier for a slowed actor (slow counts down in real time).
+func _speed(a: Dictionary, dt: float) -> float:
+	if a["slow"] <= 0.0:
+		return 1.0
+	a["slow"] = maxf(0.0, a["slow"] - dt)
+	return float(d["slow_factor"])
 
 
 func _enemy_step(dt: float) -> void:
 	var e: Dictionary = d["enemy"]
+	dt *= _speed(enemy, dt)
 	if enemy["winding"]:
 		enemy["wind_t"] -= dt
 		if enemy["wind_t"] <= 0.0:
@@ -227,8 +282,9 @@ func _hurt_enemy(n: float, label: String) -> void:
 		outcome = "won"
 
 
-func _hurt_hero(n: float, label: String) -> void:
-	_frame(enemy, "attack")
+func _hurt_hero(n: float, label: String, by_enemy: bool = true) -> void:
+	if by_enemy:
+		_frame(enemy, "attack")
 	hero["hp"] = maxf(0.0, hero["hp"] - n)
 	var sp: Dictionary = d["special_power"]
 	hero["power"] = minf(float(sp["max"]), hero["power"] + n * float(sp["per_hp_lost"]))

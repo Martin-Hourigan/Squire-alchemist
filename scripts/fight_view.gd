@@ -75,13 +75,24 @@ func _on_event(ev: Dictionary) -> void:
 			var txt3 := "+%d HP" % int(ev["amount"])
 			if ev["wasted"] > 0.0:
 				txt3 += "  (%d wasted)" % int(ev["wasted"])
-			_float(txt3, hero_at + Vector2(0, -18), Color("#8ae08a"))
+			_float(txt3, _side_at(ev["on"]) + Vector2(0, -18), Color("#8ae08a"))
 		"power":
-			_float("+%d power" % int(ev["amount"]), hero_at + Vector2(0, -36), GOLD)
+			var txt4 := "+%d power" % int(ev["amount"])
+			if ev["on"] == "enemy":
+				txt4 = "power: no effect"
+			_float(txt4, _side_at(ev["on"]) + Vector2(0, -36), GOLD)
+		"slow":
+			_float("slowed %ds" % int(ev["amount"]), _side_at(ev["on"]) + Vector2(0, -54), Color("#7aa8ff"))
 		"use":
 			_float("the knight " + ev["text"], hero_at + Vector2(0, 20), INK)
 		"windup":
 			_float(ev["text"] + "!", enemy_at + Vector2(0, -30), Color("#ff9a50"))
+
+
+func _side_at(side: String) -> Vector2:
+	if side == "enemy":
+		return _enemy_rect().get_center()
+	return _hero_rect().get_center() + Vector2(0, -40)
 
 
 func _float(text: String, pos: Vector2, col: Color) -> void:
@@ -312,18 +323,26 @@ func _potion_row(p: Vector2, pot: Dictionary) -> void:
 	for id in pot["ings"]:
 		draw_circle(Vector2(cx, p.y + 7), 6, Color(data["ingredients"][id]["col"]))
 		cx += 14
-	_text(Vector2(p.x + 50, p.y + 12), _fx_text(pot), 11, INK)
+	_text(Vector2(p.x + 46, p.y + 12), _fx_text(pot["fx"]), 10, _side_col(pot["target"]))
 
 
+## "heal 14, special +40" from {effect: amount}.
 func _fx_text(fx: Dictionary) -> String:
 	var parts: Array = []
-	if fx["heal"] > 0.0:
-		parts.append("heal %d" % int(fx["heal"]))
-	if fx["damage"] > 0.0:
-		parts.append("hurt %d" % int(fx["damage"]))
-	if fx["power"] > 0.0:
-		parts.append("power +%d" % int(fx["power"]))
+	for e in Fight.EFFECTS:
+		if fx[e] > 0.0:
+			parts.append(_fx_one(e, fx[e]))
 	return ", ".join(parts)
+
+
+func _fx_one(e: String, amount: float) -> String:
+	return String(data["effects"][e]["fmt"]) % int(amount)
+
+
+func _side_col(side: String) -> Color:
+	if side == "enemy":
+		return Color("#ffa060")
+	return Color("#8ae08a")
 
 
 func _draw_right() -> void:
@@ -365,24 +384,15 @@ func _draw_hand() -> void:
 		draw_rect(Rect2(r.position, Vector2(r.size.x, 6)), col)
 		draw_circle(r.position + Vector2(r.size.x * 0.5, 54), 24, col)
 		draw_arc(r.position + Vector2(r.size.x * 0.5, 54), 24, 0, TAU, 32, col.lightened(0.3), 1.5)
-		_text_c(r.position + Vector2(r.size.x * 0.5, 104), ing["name"], 14, INK)
-		_text_c(r.position + Vector2(r.size.x * 0.5, 124), _effect_text(ing), 11, DIM)
+		_text_c(r.position + Vector2(r.size.x * 0.5, 100), ing["name"], 14, INK)
+		_text_c(r.position + Vector2(r.size.x * 0.5, 120), _fx_one(ing["main"][0], ing["main"][1]), 11,
+			_side_col(data["effects"][ing["main"][0]]["side"]))
+		_text_c(r.position + Vector2(r.size.x * 0.5, 138), "2nd: " + _fx_one(ing["second"][0], ing["second"][1]), 10, DIM)
 		var dim := not fight.can_add(i)
 		draw_rect(r, Color(col, 0.35 if dim else 0.9), false, 1.5)
 		if dim:
 			draw_rect(r, Color(0, 0, 0, 0.35))
 		_text(r.position + Vector2(5, 20), str(i + 1), 11, DIM)
-
-
-func _effect_text(ing: Dictionary) -> String:
-	match String(ing["effect"]):
-		"heal":
-			return "heal %d" % int(ing["amount"])
-		"damage":
-			return "thrown: %d dmg" % int(ing["amount"])
-		"power":
-			return "special +%d" % int(ing["amount"])
-	return ""
 
 
 func _draw_flask() -> void:
@@ -396,13 +406,30 @@ func _draw_flask() -> void:
 		if i < fight.flask.size():
 			var col := Color(data["ingredients"][fight.flask[i]]["col"])
 			draw_circle(r.get_center(), 20, col)
-	var fx := fight.flask_effects()
-	var tx := _fx_text(fx)
-	if tx == "":
-		tx = "empty"
-	_text(FLASK.position + Vector2(216, 58), "Makes:", 12, DIM)
-	_text(FLASK.position + Vector2(216, 78), tx, 13, INK)
-	_text(FLASK.position + Vector2(14, 120), "The knight uses a handed-over potion the next time they're free.", 11, DIM)
+	var brew := fight.flask_effects()
+	# second effects under each slot: lit when another ingredient matches
+	for i in fight.flask.size():
+		var ing: Dictionary = data["ingredients"][fight.flask[i]]
+		var on: bool = brew["second_on"][i]
+		var lbl := "2nd off"
+		if on:
+			lbl = "2nd ON"
+		_text_c(_flask_slot(i).get_center() + Vector2(0, 44), lbl, 10, Color("#8ae08a") if on else DIM)
+	var x := FLASK.position.x + 216
+	var y := FLASK.position.y + 46
+	if brew["target"] == "":
+		_text(Vector2(x, y), "empty", 13, DIM)
+	else:
+		var who := "drinks it  (the knight)"
+		if brew["target"] == "enemy":
+			who = "throws it  (at the brute)"
+		_text(Vector2(x, y), "-> " + who, 12, _side_col(brew["target"]))
+		y += 20
+		for e in Fight.EFFECTS:
+			if brew["fx"][e] > 0.0:
+				_text(Vector2(x, y), _fx_one(e, brew["fx"][e]), 13, INK)
+				y += 17
+	_text(FLASK.position + Vector2(14, 130), "The FIRST ingredient decides who it's for; every effect lands there.", 10, DIM)
 	_button(_btn_hand_over(), "HAND OVER  [Q]", fight.flask_ready())
 	var slot_txt := "LOW-HP SLOT  [W]"
 	if fight.low_slot != null:

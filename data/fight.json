@@ -26,12 +26,22 @@
 		"big_dmg": 14,
 		"big_windup": 1.5
 	},
-	"ingredients": {
-		"red": {"name": "Red", "effect": "heal", "amount": 8, "col": "#c84a40"},
-		"black": {"name": "Black", "effect": "damage", "amount": 8, "col": "#6a6a78"},
-		"gold": {"name": "Gold", "effect": "power", "amount": 25, "col": "#d8b030"}
+	"effects": {
+		"_note": "side = who the potion goes to when this effect is FIRST in the flask (hero = handed over and drunk, enemy = thrown). Every effect then lands on that target.",
+		"heal": {"name": "Heal", "side": "hero", "fmt": "heal %d"},
+		"power": {"name": "Power", "side": "hero", "fmt": "special +%d"},
+		"damage": {"name": "Damage", "side": "enemy", "fmt": "%d damage"},
+		"slow": {"name": "Slow", "side": "enemy", "fmt": "slow %ds"}
 	},
-	"bag": ["red", "red", "red", "red", "black", "black", "black", "gold", "gold", "gold"],
+	"slow_factor": 0.5,
+	"ingredients": {
+		"_note": "main always counts (and stacks with copies); second only counts if a DIFFERENT ingredient in the flask has the same effect.",
+		"red": {"name": "Red", "col": "#c84a40", "main": ["heal", 8], "second": ["power", 15]},
+		"gold": {"name": "Gold", "col": "#d8b030", "main": ["power", 25], "second": ["heal", 6]},
+		"black": {"name": "Black", "col": "#6a6a78", "main": ["damage", 8], "second": ["slow", 3]},
+		"blue": {"name": "Blue", "col": "#4a7ad0", "main": ["slow", 4], "second": ["damage", 5]}
+	},
+	"bag": ["red", "red", "red", "gold", "gold", "gold", "black", "black", "black", "blue", "blue", "blue"],
 	"hand_cap": 5,
 	"start_hand": 3,
 	"trickle_every": 4.0,

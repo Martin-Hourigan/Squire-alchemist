@@ -1,10 +1,11 @@
 extends SceneTree
 ## Headless: runs the fight many times with simple squire bots.
 ##   godot --headless --path . --script res://tests/sim_test.gd
-## idle = never brews; dump = hands over every ingredient the moment it
-## arrives; simple = keeps a full flask of reds in the low-HP slot, hands over
-## black/gold straight away and reds when the hero is below 60%, redraws when
-## it can.
+## idle = never brews; single = hands over every ingredient alone the moment
+## it arrives; mix = throws whatever it holds into one flask (random order) -
+## shows what careless mixing costs; paired = brews matching pairs (red+gold
+## for the knight, black+blue at the brute), keeps red+gold+red in the low-HP
+## slot, redraws when it can.
 
 const RUNS := 300
 const DT := 0.05
@@ -13,7 +14,7 @@ const DT := 0.05
 func _init() -> void:
 	var data := Fight.load_data()
 	var errors := 0
-	for bot in ["idle", "dump", "simple"]:
+	for bot in ["idle", "single", "mix", "paired"]:
 		var won := 0
 		var hp_left := 0.0
 		var secs := 0.0
@@ -39,28 +40,38 @@ func _init() -> void:
 func _bot(f: Fight, bot: String) -> void:
 	if bot == "idle":
 		return
-	if bot == "dump":
+	if bot == "single":
 		while not f.hand.is_empty():
 			f.add_to_flask(0)
 			f.hand_over()
 		return
-	if f.redraw_ready():
-		f.redraw()
-	# black and gold go straight over, one per flask
-	for id in ["black", "gold"]:
-		var i := f.hand.find(id)
-		if i >= 0 and f.flask.is_empty():
-			f.add_to_flask(i)
+	if bot == "mix":
+		if f.hand.size() >= 3:
+			f.hand.shuffle()
+			while f.add_to_flask(0):
+				pass
 			f.hand_over()
-	# a full flask of reds sits in the low-HP slot
-	if f.low_slot == null:
-		while f.hand.has("red") and f.flask.size() < int(f.d["flask_max"]):
-			f.add_to_flask(f.hand.find("red"))
-		if f.flask.size() >= int(f.d["flask_max"]):
-			f.to_low_slot()
-		else:
-			while not f.flask.is_empty():
-				f.take_from_flask(0)
-	elif f.hero["hp"] < f.hero["max"] * 0.6 and f.hand.has("red") and f.flask.is_empty():
-		f.add_to_flask(f.hand.find("red"))
+		return
+	if f.redraw_ready() and f.hand.size() >= 3:
+		f.redraw()
+	if f.low_slot == null and _brew(f, ["red", "gold", "red"]):
+		f.to_low_slot()
+	if _brew(f, ["black", "blue"]):
 		f.hand_over()
+	if f.hero["hp"] < f.hero["max"] * 0.75 and _brew(f, ["red", "gold"]):
+		f.hand_over()
+
+
+## Put exactly these ingredients in the flask (in order) if the hand has them.
+func _brew(f: Fight, ids: Array) -> bool:
+	if not f.flask.is_empty():
+		return false
+	var need := {}
+	for id in ids:
+		need[id] = int(need.get(id, 0)) + 1
+	for id in need:
+		if f.hand.count(id) < need[id]:
+			return false
+	for id in ids:
+		f.add_to_flask(f.hand.find(id))
+	return true
