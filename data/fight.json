@@ -1,0 +1,43 @@
+{
+	"_note": "Every number here is a PLACEHOLDER (2026-10-18) - tune freely.",
+	"hero": {
+		"asset": "knight_back",
+		"hp": 60,
+		"attack_every": 2.0,
+		"attack_dmg": 6,
+		"weapon": "sword",
+		"drink_time": 0.4
+	},
+	"weapons": {
+		"sword": {"special": "Big Slash", "special_dmg": 20}
+	},
+	"special_power": {
+		"max": 100,
+		"per_hp_lost": 2.0,
+		"per_second": 3.0
+	},
+	"enemy": {
+		"asset": "brute",
+		"hp": 90,
+		"attack_every": 2.5,
+		"attack_dmg": 5,
+		"big_every": 4,
+		"big_name": "Big Swing",
+		"big_dmg": 14,
+		"big_windup": 1.5
+	},
+	"ingredients": {
+		"red": {"name": "Red", "effect": "heal", "amount": 8, "col": "#c84a40"},
+		"black": {"name": "Black", "effect": "damage", "amount": 8, "col": "#6a6a78"},
+		"gold": {"name": "Gold", "effect": "power", "amount": 25, "col": "#d8b030"}
+	},
+	"bag": ["red", "red", "red", "red", "black", "black", "black", "gold", "gold", "gold"],
+	"hand_cap": 5,
+	"start_hand": 3,
+	"trickle_every": 4.0,
+	"redraw_fill": 15.0,
+	"flask_min": 1,
+	"flask_max": 3,
+	"low_hp_at": 0.3,
+	"attack_frame_time": 0.35
+}
