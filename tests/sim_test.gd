@@ -1,5 +1,6 @@
 extends SceneTree
-## Headless: runs the fight many times with simple squire bots.
+## Headless: runs the fight many times with simple squire bots, in both
+## modes (real time, turns).
 ##   godot --headless --path . --script res://tests/sim_test.gd
 ## idle = never brews; single = hands over every ingredient alone the moment
 ## it arrives; mix = throws whatever it holds into one flask (random order) -
@@ -14,36 +15,47 @@ const DT := 0.05
 func _init() -> void:
 	var data := Fight.load_data()
 	var errors := 0
-	for bot in ["idle", "single", "mix", "paired"]:
+	for mode in ["realtime", "turns"]:
+		for bot in ["idle", "single", "mix", "paired"]:
+			errors += _run(data, mode, bot)
+	print("errors: %d" % errors)
+	quit(1 if errors else 0)
+
+
+func _run(data: Dictionary, mode: String, bot: String) -> int:
+		var errors := 0
 		var won := 0
 		var hp_left := 0.0
 		var secs := 0.0
+		var turns := 0
 		for r in RUNS:
 			var f := Fight.new()
-			f.setup(data, 1000 + r)
-			while f.outcome == "" and f.t < 300.0:
-				_bot(f, bot)
+			f.setup(data, 1000 + r, mode)
+			while f.outcome == "" and f.t < 600.0:
+				if f.your_turn():
+					_bot(f, bot)
+					f.end_turn()
 				f.step(DT)
 				f.events.clear()
+			turns += f.turn
 			if f.outcome == "":
 				errors += 1
 			if f.outcome == "won":
 				won += 1
 				hp_left += f.hero["hp"]
 			secs += f.t
-		print("%-7s win %3d%%   hp left when won %4.1f/%d   fight length %4.1fs" % [
-			bot, 100 * won / RUNS, hp_left / maxi(1, won), int(data["hero"]["hp"]), secs / RUNS])
-	print("errors: %d" % errors)
-	quit(1 if errors else 0)
+		var length := "%4.1fs" % (secs / RUNS) if mode == "realtime" else "%4.1f turns" % (float(turns) / RUNS)
+		print("%-8s %-7s win %3d%%   hp left when won %4.1f/%d   fight length %s" % [
+			mode, bot, 100 * won / RUNS, hp_left / maxi(1, won), int(data["hero"]["hp"]), length])
+		return errors
 
 
 func _bot(f: Fight, bot: String) -> void:
 	if bot == "idle":
 		return
 	if bot == "single":
-		while not f.hand.is_empty():
-			f.add_to_flask(0)
-			f.hand_over()
+		while not f.hand.is_empty() and f.add_to_flask(0) and f.hand_over():
+			pass
 		return
 	if bot == "mix":
 		if f.hand.size() >= 3:

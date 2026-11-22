@@ -43,9 +43,23 @@
 	},
 	"bag": ["red", "red", "red", "gold", "gold", "gold", "black", "black", "black", "blue", "blue", "blue"],
 	"hand_cap": 5,
-	"start_hand": 3,
-	"trickle_every": 4.0,
-	"redraw_fill": 15.0,
+	"realtime": {
+		"_note": "No ingredients arrive on their own: you start with a full hand and REDRAW (replace your hand) whenever its meter is full.",
+		"start_hand": 5,
+		"redraw_fill": 15.0
+	},
+	"turns": {
+		"_note": "Your turn: brew and hand over, then END TURN. The hero attacks (an enemy that chose BLOCK stops the first hit), then the enemy does what it showed (the hero always blocks: hits land at hero_block). Slow: the slowed enemy hits for slow_factor, for 1 turn per slow_turn_secs.",
+		"start_hand": 5,
+		"draw_per_turn": 2,
+		"potions_per_turn": 1,
+		"redraw_turns": 3,
+		"hero_block": 0.5,
+		"power_per_turn": 6,
+		"slow_turn_secs": 2.0,
+		"enemy_block_chance": 0.25,
+		"beat": 0.7
+	},
 	"flask_min": 1,
 	"flask_max": 3,
 	"low_hp_at": 0.3,

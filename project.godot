@@ -13,6 +13,9 @@ config_version=5
 config/name="Squire (alchemist)"
 config/description="Real-time combat slice: the hero fights on their own; you, the alchemist squire, brew potions from a bag of ingredients and hand them over."
 run/main_scene="res://scenes/main.tscn"
+config/version="0.1"
+config/icon="res://icon.png"
+config/quit_on_go_back=false
 config/features=PackedStringArray("4.5", "GL Compatibility")
 
 [autoload]
@@ -26,7 +29,8 @@ window/size/viewport_height=540
 window/size/window_width_override=1280
 window/size/window_height_override=720
 window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
+window/stretch/aspect="keep"
+window/handheld/orientation=4
 
 [dotnet]
 
@@ -37,3 +41,5 @@ project/assembly_name="Squire (alchemist)"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 anti_aliasing/quality/msaa_2d=2
+textures/vram_compression/import_etc2_astc=true
+environment/defaults/default_clear_color=Color(0.09, 0.086, 0.102, 1)

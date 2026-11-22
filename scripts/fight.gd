@@ -1,8 +1,13 @@
 class_name Fight
 extends RefCounted
-## The rules of one real-time fight (no drawing here; fight_view.gd shows it).
-## The hero fights on their own: attacks on a timer, fires the weapon special
-## when its power is full. You, the alchemist, hold ingredients drawn from your
+## The rules of one fight (no drawing here; fight_view.gd shows it), in one
+## of two modes:
+##   realtime - the hero fights on their own: attacks on a timer, fires the
+##     weapon special when its power is full.
+##   turns - your turn (brew, hand over, END TURN), then the hero attacks,
+##     then the enemy does what it showed it would (attack, block, or a Big
+##     Swing). An enemy that blocks stops the hero's first hit; the hero
+##     always blocks the enemy's hit, so it lands at hero_block. You, the alchemist, hold ingredients drawn from your
 ## bag, put 1-3 in the flask and either HAND IT OVER (the hero uses it the next
 ## time they're free) or put it in the LOW-HP SLOT (used when HP drops low).
 ## Each ingredient has a MAIN effect (always counts, stacks with copies) and a
@@ -10,11 +15,14 @@ extends RefCounted
 ## same effect). The FIRST effect in the flask decides the target: hero-side
 ## effects mean the hero drinks it, enemy-side ones mean they throw it - and
 ## every effect lands on that target, so a bad mix can heal the enemy.
-## Ingredients trickle in one at a time; a slowly filling meter lets you press
-## REDRAW to swap your whole hand. Used ingredients reshuffle back into the bag.
+## You start with a full hand; nothing arrives on its own in real time. A
+## meter (seconds, or turns) lets you REDRAW: swap your whole hand. In turns,
+## a couple more are drawn each turn. Used ingredients reshuffle back in.
 ## All numbers come from data/fight.json and are placeholders.
 
 var d: Dictionary
+var mode := "realtime"
+var m: Dictionary  # d[mode]
 var rng := RandomNumberGenerator.new()
 var t := 0.0
 var outcome := ""    # "", "won", "lost"
@@ -28,15 +36,23 @@ var flask: Array = []      # ingredient ids (still count toward the hand cap)
 var discard: Array = []
 var handed: Array = []     # potions waiting for the hero, used in order
 var low_slot = null        # one potion or null
-var trickle_t := 0.0
-var redraw_t := 0.0
+var redraw_t := 0.0  # seconds (realtime) or turns since the last redraw
+
+# turns
+var turn := 1
+var phase := "you"  # you, hero (hero just attacked), enemy (enemy just acted)
+var phase_t := 0.0
+var potions_used := 0  # this turn
+var intent := "attack"  # what the enemy will do: attack, big, block
 
 ## What happened since the view last looked: {kind, amount, text}.
 var events: Array = []
 
 
-func setup(data: Dictionary, seed_value: int) -> void:
+func setup(data: Dictionary, seed_value: int, mode_ := "realtime") -> void:
 	d = data
+	mode = mode_
+	m = d[mode]
 	rng.seed = seed_value
 	var h: Dictionary = d["hero"]
 	hero = {"hp": float(h["hp"]), "max": float(h["hp"]), "power": 0.0, "slow": 0.0,
@@ -46,8 +62,10 @@ func setup(data: Dictionary, seed_value: int) -> void:
 		"count": 0, "slow": 0.0, "winding": false, "wind_t": 0.0, "frame": "idle", "frame_t": 0.0}
 	draw_pile = d["bag"].duplicate()
 	_shuffle(draw_pile)
-	for i in int(d["start_hand"]):
+	for i in int(m["start_hand"]):
 		_draw_one()
+	if mode == "turns":
+		_pick_intent()
 
 
 # ── Your actions ─────────────────────────────────────────────────────────────
@@ -78,26 +96,50 @@ func flask_ready() -> bool:
 	return outcome == "" and flask.size() >= int(d["flask_min"])
 
 
+## Can you act now? (Always in real time; only on your turn in turns.)
+func your_turn() -> bool:
+	return outcome == "" and (mode == "realtime" or phase == "you")
+
+
+func potions_left() -> int:
+	return 99 if mode == "realtime" else int(m["potions_per_turn"]) - potions_used
+
+
+func can_hand_over() -> bool:
+	return flask_ready() and your_turn() and potions_left() > 0
+
+
+## Real time: the hero uses it at their next chance. Turns: right away.
 func hand_over() -> bool:
-	if not flask_ready():
+	if not can_hand_over():
 		return false
-	handed.append(_brew())
+	if mode == "turns":
+		potions_used += 1
+		_use(_brew())
+	else:
+		handed.append(_brew())
 	return true
 
 
 func can_slot() -> bool:
-	return flask_ready() and low_slot == null
+	return flask_ready() and low_slot == null and your_turn() and potions_left() > 0
 
 
 func to_low_slot() -> bool:
 	if not can_slot():
 		return false
+	if mode == "turns":
+		potions_used += 1
 	low_slot = _brew()
 	return true
 
 
+func redraw_need() -> float:
+	return float(m["redraw_fill"]) if mode == "realtime" else float(m["redraw_turns"])
+
+
 func redraw_ready() -> bool:
-	return outcome == "" and redraw_t >= float(d["redraw_fill"])
+	return your_turn() and redraw_t >= redraw_need()
 
 
 ## Discard the hand (not the flask) and draw a full one.
@@ -109,7 +151,6 @@ func redraw() -> bool:
 	while held() < int(d["hand_cap"]) and _draw_one():
 		pass
 	redraw_t = 0.0
-	trickle_t = 0.0
 	return true
 
 
@@ -163,22 +204,102 @@ func step(dt: float) -> void:
 	if outcome != "":
 		return
 	t += dt
-	# ingredients: trickle while there's room; redraw meter fills
-	if held() < int(d["hand_cap"]):
-		trickle_t += dt
-		if trickle_t >= float(d["trickle_every"]):
-			trickle_t = 0.0
-			_draw_one()
-	else:
-		trickle_t = 0.0
-	redraw_t = minf(float(d["redraw_fill"]), redraw_t + dt)
 	for a in [hero, enemy]:
 		a["frame_t"] -= dt
 		if a["frame_t"] <= 0.0:
 			a["frame"] = "idle"
+	if mode == "turns":
+		_turn_step(dt)
+		return
+	redraw_t = minf(redraw_need(), redraw_t + dt)
 	_hero_step(dt)
 	if outcome == "":
 		_enemy_step(dt)
+
+
+# ── Turns ────────────────────────────────────────────────────────────────────
+
+## Done on your turn: the hero attacks now, the enemy a beat later.
+func end_turn() -> bool:
+	if mode != "turns" or not your_turn():
+		return false
+	_hero_attacks()
+	phase = "hero"
+	phase_t = float(m["beat"])
+	return true
+
+
+func _turn_step(dt: float) -> void:
+	if phase == "you":
+		return
+	phase_t -= dt
+	if phase_t > 0.0:
+		return
+	if phase == "hero":
+		_enemy_acts()
+		phase = "enemy"
+		phase_t = float(m["beat"])
+	elif outcome == "":
+		_new_turn()
+
+
+## The hero's attack, then the special too if power is full. An enemy that
+## chose to block stops the first hit.
+func _hero_attacks() -> void:
+	_frame(hero, "attack")
+	var sp: Dictionary = d["special_power"]
+	var w: Dictionary = d["weapons"][d["hero"]["weapon"]]
+	var hits: Array = [[float(d["hero"]["attack_dmg"]), ""]]
+	if hero["power"] >= float(sp["max"]):
+		hero["power"] = 0.0
+		hits.append([float(w["special_dmg"]), String(w["special"]) + "!"])
+	for i in hits.size():
+		if i == 0 and intent == "block":
+			events.append({"kind": "enemy_block", "text": "blocked"})
+			continue
+		_hurt_enemy(hits[i][0] * _weak(hero), hits[i][1])
+		if outcome != "":
+			return
+
+
+func _enemy_acts() -> void:
+	var e: Dictionary = d["enemy"]
+	var cut := float(m["hero_block"]) * _weak(enemy)
+	match intent:
+		"attack": _hurt_hero(float(e["attack_dmg"]) * cut, "blocked")
+		"big": _hurt_hero(float(e["big_dmg"]) * cut, String(e["big_name"]) + ", blocked")
+		"block": events.append({"kind": "windup", "text": "guards"})
+
+
+func _new_turn() -> void:
+	turn += 1
+	phase = "you"
+	potions_used = 0
+	redraw_t = minf(redraw_need(), redraw_t + 1.0)
+	for a in [hero, enemy]:
+		a["slow"] = maxf(0.0, a["slow"] - 1.0)
+	var sp: Dictionary = d["special_power"]
+	hero["power"] = minf(float(sp["max"]), hero["power"] + float(m["power_per_turn"]))
+	for i in int(m["draw_per_turn"]):
+		if held() >= int(d["hand_cap"]) or not _draw_one():
+			break
+	_pick_intent()
+
+
+## Every big_every-th turn a Big Swing; otherwise attack, or now and then block.
+func _pick_intent() -> void:
+	enemy["count"] += 1
+	if enemy["count"] % int(d["enemy"]["big_every"]) == 0:
+		intent = "big"
+	elif rng.randf() < float(m["enemy_block_chance"]):
+		intent = "block"
+	else:
+		intent = "attack"
+
+
+## Turns: a slowed actor hits for slow_factor.
+func _weak(a: Dictionary) -> float:
+	return float(d["slow_factor"]) if a["slow"] > 0.0 else 1.0
 
 
 func _hero_step(dt: float) -> void:
@@ -237,7 +358,8 @@ func _use(p: Dictionary, from: String = "") -> void:
 		# PLACEHOLDER: the enemy has no special, so power thrown at it does nothing
 		events.append({"kind": "power", "on": p["target"], "amount": fx["power"]})
 	if fx["slow"] > 0.0:
-		who["slow"] += fx["slow"]
+		# turns: slow lasts a turn per slow_turn_secs of it
+		who["slow"] += fx["slow"] if mode == "realtime" else ceilf(fx["slow"] / float(m["slow_turn_secs"]))
 		events.append({"kind": "slow", "on": p["target"], "amount": fx["slow"]})
 	if fx["damage"] > 0.0:
 		if on_hero:
@@ -291,7 +413,7 @@ func _hurt_hero(n: float, label: String, by_enemy: bool = true) -> void:
 	events.append({"kind": "hero_hit", "amount": n, "text": label})
 	if hero["hp"] <= 0.0:
 		outcome = "lost"
-	elif hero["busy"] <= 0.0:
+	elif mode == "turns" or hero["busy"] <= 0.0:
 		_check_low_slot()
 
 

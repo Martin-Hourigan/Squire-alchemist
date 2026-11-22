@@ -1,13 +1,15 @@
 extends Node2D
-## Shows one real-time fight (rules in fight.gd). Dungeon-crawler window: the
-## enemy facing you, the hero's back in the foreground. Hero and enemy are
-## PLACEHOLDER rectangles named after their asset and frame (idle / attack).
+## The menu (REAL-TIME / TURN-BASED, update button) and one fight (rules in
+## fight.gd). Dungeon-crawler window: the enemy facing you, the hero's back in
+## the foreground. Hero and enemy are PLACEHOLDER rectangles named after their
+## asset and frame (idle / attack).
 ## Left: the hero (HP, special power, potions handed over, low-HP slot).
-## Right: your bag (draw pile, discard, trickle, REDRAW).
+## Right: your bag (draw pile, discard, REDRAW); in turns also END TURN.
 ## Bottom: your hand of ingredients and the flask.
-## Mouse: click an ingredient to put it in the flask, click a flask ingredient
-## to take it back, then HAND OVER or LOW-HP SLOT. Keys: 1-5, Q, W, R.
-## Dev args: --seed <n>
+## Tap/click an ingredient to put it in the flask, a flask ingredient to take
+## it back, then HAND OVER or LOW-HP SLOT. Keys: 1-5, Q, W, R, Space (end
+## turn), Esc / phone back (menu).
+## Dev args: --seed <n>, --mode realtime|turns (skips the menu)
 
 const WIN := Rect2(212, 12, 536, 300)
 const BACK := Rect2(400, 92, 160, 96)
@@ -23,6 +25,14 @@ const GOLD := Color("#c8a040")
 
 var fight: Fight
 var data: Dictionary
+var screen := "menu"  # menu, fight
+var mode := "realtime"
+var update_state := "idle"  # idle, checking, latest, new, failed, downloading, ready, download_failed
+var update_tag := ""
+var update_url := ""
+var update_page := ""
+var http: HTTPRequest
+var download: HTTPRequest
 var _font: Font
 var _floaters: Array = []    # {text, pos, t, col}
 var _seed := 1
@@ -31,21 +41,44 @@ var _seed := 1
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	data = Fight.load_data()
-	var args := OS.get_cmdline_args()
+	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	var i := args.find("--seed")
 	if i >= 0 and i + 1 < args.size():
 		_seed = int(args[i + 1])
+	var j := args.find("--mode")
+	if j >= 0 and j + 1 < args.size():
+		_start(args[j + 1])
+	# an update downloaded last time has been installed (or given up on)
+	if FileAccess.file_exists(Update.APK):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Update.APK))
+	if OS.has_feature("mobile"):
+		_check_update()
+
+
+func _start(m: String) -> void:
+	mode = m
+	screen = "fight"
 	_new_fight()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		if screen == "menu":
+			get_tree().quit()
+		screen = "menu"
 
 
 func _new_fight() -> void:
 	fight = Fight.new()
-	fight.setup(data, _seed)
+	fight.setup(data, _seed, mode)
 	_seed += 1
 	_floaters.clear()
 
 
 func _process(dt: float) -> void:
+	if screen == "menu":
+		queue_redraw()
+		return
 	fight.step(dt)
 	for ev in fight.events:
 		_on_event(ev)
@@ -85,6 +118,8 @@ func _on_event(ev: Dictionary) -> void:
 			_float("slowed %ds" % int(ev["amount"]), _side_at(ev["on"]) + Vector2(0, -54), Color("#7aa8ff"))
 		"use":
 			_float("the knight " + ev["text"], hero_at + Vector2(0, 20), INK)
+		"enemy_block":
+			_float("blocked", enemy_at + Vector2(0, -20), Color("#c8c8d0"))
 		"windup":
 			_float(ev["text"] + "!", enemy_at + Vector2(0, -30), Color("#ff9a50"))
 
@@ -102,10 +137,17 @@ func _float(text: String, pos: Vector2, col: Color) -> void:
 # ── Input ────────────────────────────────────────────────────────────────────
 
 func _unhandled_input(ev: InputEvent) -> void:
+	if screen == "menu":
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			_menu_click(ev.position)
+		return
 	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 		_click(ev.position)
 	elif ev is InputEventKey and ev.pressed and not ev.echo:
 		var k: int = ev.keycode
+		if k == KEY_ESCAPE:
+			screen = "menu"
+			return
 		if fight.outcome != "":
 			if k == KEY_R or k == KEY_SPACE or k == KEY_ENTER:
 				_new_fight()
@@ -118,14 +160,28 @@ func _unhandled_input(ev: InputEvent) -> void:
 			fight.to_low_slot()
 		elif k == KEY_R:
 			fight.redraw()
+		elif k == KEY_SPACE or k == KEY_ENTER:
+			fight.end_turn()
 		elif k == KEY_BACKSPACE:
 			while not fight.flask.is_empty():
 				fight.take_from_flask(0)
 
 
+func _menu_click(p: Vector2) -> void:
+	if _btn_mode(0).has_point(p):
+		_start("realtime")
+	elif _btn_mode(1).has_point(p):
+		_start("turns")
+	elif _btn_update().has_point(p):
+		_update_tap()
+
+
 func _click(p: Vector2) -> void:
 	if fight.outcome != "":
-		_new_fight()
+		if _btn_menu().has_point(p):
+			screen = "menu"
+		else:
+			_new_fight()
 		return
 	for i in fight.hand.size():
 		if _card_rect(i).has_point(p):
@@ -141,6 +197,8 @@ func _click(p: Vector2) -> void:
 		fight.to_low_slot()
 	elif _btn_redraw().has_point(p):
 		fight.redraw()
+	elif mode == "turns" and _btn_end_turn().has_point(p):
+		fight.end_turn()
 
 
 # ── Layout ───────────────────────────────────────────────────────────────────
@@ -165,6 +223,22 @@ func _btn_redraw() -> Rect2:
 	return Rect2(RIGHT.position + Vector2(12, 236), Vector2(RIGHT.size.x - 24, 44))
 
 
+func _btn_end_turn() -> Rect2:
+	return Rect2(RIGHT.position + Vector2(12, 130), Vector2(RIGHT.size.x - 24, 60))
+
+
+func _btn_mode(i: int) -> Rect2:
+	return Rect2(330, 210 + i * 90, 300, 70)
+
+
+func _btn_update() -> Rect2:
+	return Rect2(330, 430, 300, 46)
+
+
+func _btn_menu() -> Rect2:
+	return Rect2(400, 350, 160, 44)
+
+
 func _enemy_rect() -> Rect2:
 	var r := Rect2(WIN.get_center().x + 10, 84, 130, 160)
 	if fight.enemy["frame"] == "attack":
@@ -184,6 +258,9 @@ func _hero_rect() -> Rect2:
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, Vector2(960, 540)), Color("#17161a"))
+	if screen == "menu":
+		_draw_menu()
+		return
 	_draw_corridor()
 	_draw_enemy()
 	_draw_hero()
@@ -263,7 +340,21 @@ func _draw_enemy() -> void:
 	_bar(bar, e["hp"] / e["max"], Color("#c04a40"))
 	_text_c(bar.get_center() + Vector2(0, 4), "%d / %d" % [int(e["hp"]), int(e["max"])], 11, INK)
 	_text_c(Vector2(bar.get_center().x, bar.position.y - 6), data["enemy"]["asset"].to_upper(), 12, DIM)
-	if e["winding"]:
+	if fight.mode == "turns":
+		var e_data: Dictionary = data["enemy"]
+		var plan := "ATTACK %d" % int(e_data["attack_dmg"])
+		var pcol := Color("#ffb070")
+		if fight.intent == "big":
+			plan = "%s %d" % [String(e_data["big_name"]).to_upper(), int(e_data["big_dmg"])]
+			pcol = Color("#ff7a50")
+		elif fight.intent == "block":
+			plan = "BLOCK"
+			pcol = Color("#c8c8d0")
+		if fight.phase == "you":
+			_text_c(Vector2(bar.get_center().x, bar.end.y + 22), "NEXT: " + plan, 15, pcol)
+		if e["slow"] > 0.0:
+			_text_c(Vector2(bar.get_center().x, bar.end.y + 40), "slowed %d turn%s" % [int(e["slow"]), "" if e["slow"] == 1.0 else "s"], 12, Color("#7aa8ff"))
+	elif e["winding"]:
 		var wd: float = float(data["enemy"]["big_windup"])
 		var wr := Rect2(WIN.get_center().x - 90, 54, 180, 10)
 		_bar(wr, 1.0 - e["wind_t"] / wd, Color("#ff9a50"))
@@ -299,14 +390,18 @@ func _draw_left() -> void:
 	_text(Vector2(x, y), "SPECIAL: %s (%d)" % [w_data["special"], int(w_data["special_dmg"])], 11, DIM)
 	_bar(Rect2(x, y + 4, w, 12), h["power"] / pmax, GOLD)
 	y += 30
-	_text(Vector2(x, y), "Attacks every %.1fs for %d" % [float(data["hero"]["attack_every"]), int(data["hero"]["attack_dmg"])], 11, DIM)
-	y += 24
-	_text(Vector2(x, y), "HANDED OVER (next chance)", 11, DIM)
-	y += 6
-	if fight.handed.is_empty():
-		_text(Vector2(x, y + 16), "-", 12, DIM)
-	for i in mini(fight.handed.size(), 4):
-		_potion_row(Vector2(x, y + 4 + i * 20), fight.handed[i])
+	if fight.mode == "turns":
+		_text(Vector2(x, y), "Attacks once a turn for %d" % int(data["hero"]["attack_dmg"]), 11, DIM)
+		_text(Vector2(x, y + 18), "Blocks: takes x%.1f" % float(data["turns"]["hero_block"]), 11, DIM)
+	else:
+		_text(Vector2(x, y), "Attacks every %.1fs for %d" % [float(data["hero"]["attack_every"]), int(data["hero"]["attack_dmg"])], 11, DIM)
+		y += 24
+		_text(Vector2(x, y), "HANDED OVER (next chance)", 11, DIM)
+		y += 6
+		if fight.handed.is_empty():
+			_text(Vector2(x, y + 16), "-", 12, DIM)
+		for i in mini(fight.handed.size(), 4):
+			_potion_row(Vector2(x, y + 4 + i * 20), fight.handed[i])
 	y = LEFT.position.y + 214
 	_text(Vector2(x, y), "LOW-HP SLOT (at %d HP)" % int(low), 11, Color("#ffd060"))
 	var slot := Rect2(x, y + 6, w, 44)
@@ -357,17 +452,19 @@ func _draw_right() -> void:
 	_text(Vector2(x, y), "Used (reshuffles): %d" % fight.discard.size(), 12, DIM)
 	y += 18
 	_text(Vector2(x, y), "Holding: %d / %d" % [fight.held(), int(data["hand_cap"])], 12, DIM)
-	y += 30
-	_text(Vector2(x, y), "NEXT INGREDIENT", 11, DIM)
-	var full := fight.held() >= int(data["hand_cap"])
-	_bar(Rect2(x, y + 4, w, 10), fight.trickle_t / float(data["trickle_every"]), Color("#7ab0d0"))
-	if full:
-		_text(Vector2(x, y + 30), "hand full - paused", 11, DIM)
-	y += 62
-	_text(Vector2(x, y), "REDRAW METER", 11, DIM)
-	_bar(Rect2(x, y + 4, w, 10), fight.redraw_t / float(data["redraw_fill"]), Color("#b07ad0"))
-	var ready := fight.redraw_ready()
-	_button(_btn_redraw(), "REDRAW HAND  [R]", ready)
+	if fight.mode == "turns":
+		y += 18
+		_text(Vector2(x, y), "TURN %d" % fight.turn, 14, INK)
+		_text(Vector2(x + 80, y), "potions left: %d" % maxi(fight.potions_left(), 0), 11, DIM)
+		_button(_btn_end_turn(), "END TURN  [Space]", fight.your_turn())
+		y = RIGHT.position.y + 212
+		var left := int(fight.redraw_need() - fight.redraw_t)
+		_text(Vector2(x, y), "REDRAW: ready" if left <= 0 else "REDRAW: in %d turn%s" % [left, "" if left == 1 else "s"], 11, DIM)
+	else:
+		y += 62
+		_text(Vector2(x, y), "REDRAW METER", 11, DIM)
+		_bar(Rect2(x, y + 4, w, 10), fight.redraw_t / fight.redraw_need(), Color("#b07ad0"))
+	_button(_btn_redraw(), "REDRAW HAND  [R]", fight.redraw_ready())
 
 
 func _draw_hand() -> void:
@@ -430,7 +527,7 @@ func _draw_flask() -> void:
 				_text(Vector2(x, y), _fx_one(e, brew["fx"][e]), 13, INK)
 				y += 17
 	_text(FLASK.position + Vector2(14, 130), "The FIRST ingredient decides who it's for; every effect lands there.", 10, DIM)
-	_button(_btn_hand_over(), "HAND OVER  [Q]", fight.flask_ready())
+	_button(_btn_hand_over(), "HAND OVER  [Q]", fight.can_hand_over())
 	var slot_txt := "LOW-HP SLOT  [W]"
 	if fight.low_slot != null:
 		slot_txt = "SLOT IS FULL"
@@ -448,7 +545,98 @@ func _draw_outcome() -> void:
 	if won:
 		sub += "  ·  %d / %d HP left" % [int(ceil(fight.hero["hp"])), int(fight.hero["max"])]
 	_text_c(Vector2(480, 276), sub, 16, INK)
-	_text_c(Vector2(480, 310), "click or R for another fight", 13, DIM)
+	_text_c(Vector2(480, 310), "tap for another fight", 13, DIM)
+	_button(_btn_menu(), "MENU", true)
+
+
+func _draw_menu() -> void:
+	_text_c(Vector2(480, 130), "SQUIRE", 44, GOLD)
+	_text_c(Vector2(480, 165), "the alchemist", 18, DIM)
+	_button(_btn_mode(0), "REAL-TIME", true)
+	_button(_btn_mode(1), "TURN-BASED", true)
+	_button(_btn_update(), update_label(), update_state != "checking" and update_state != "downloading")
+	_text(Vector2(14, 528), "v" + Update.current(), 12, DIM)
+
+
+# ── Updates ──────────────────────────────────────────────────────────────────
+
+func _check_update() -> void:
+	if http == null:
+		http = HTTPRequest.new()
+		add_child(http)
+		http.request_completed.connect(_on_release)
+	update_state = "checking"
+	if http.request(Update.API, ["User-Agent: Squire-alchemist", "Accept: application/vnd.github+json"]) != OK:
+		update_state = "failed"
+
+
+func _on_release(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	var rel := {}
+	if result == HTTPRequest.RESULT_SUCCESS and code == 200:
+		rel = Update.read_release(body.get_string_from_utf8())
+	if rel.is_empty():
+		update_state = "failed"
+		return
+	update_tag = rel.tag
+	update_url = rel.url
+	update_page = rel.page
+	update_state = "new" if Update.newer(update_tag, Update.current()) else "latest"
+
+
+## Download the new APK in the game, then hand it to Android's installer.
+func _download_update() -> void:
+	if download == null:
+		download = HTTPRequest.new()
+		download.use_threads = true
+		download.download_file = Update.APK
+		add_child(download)
+		download.request_completed.connect(_on_downloaded)
+	update_state = "downloading"
+	if download.request(update_url, ["User-Agent: Squire-alchemist"]) != OK:
+		update_state = "download_failed"
+
+
+func _on_downloaded(result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or not FileAccess.file_exists(Update.APK):
+		update_state = "download_failed"
+		return
+	update_state = "ready"
+	Update.install()
+
+
+func update_label() -> String:
+	match update_state:
+		"checking":
+			return "CHECKING..."
+		"latest":
+			return "UP TO DATE"
+		"new":
+			return "UPDATE TO " + update_tag
+		"downloading":
+			var size := download.get_body_size()
+			if size > 0:
+				return "DOWNLOADING %d%%" % (100 * download.get_downloaded_bytes() / size)
+			return "DOWNLOADING..."
+		"ready":
+			return "INSTALL " + update_tag
+		"download_failed":
+			return "FAILED. RETRY"
+	return "CHECK FOR UPDATES"
+
+
+func _update_tap() -> void:
+	match update_state:
+		"new", "download_failed":
+			if OS.get_name() == "Android":
+				_download_update()
+			else:
+				OS.shell_open(update_page)
+		"ready":
+			Update.install()
+		"checking", "downloading":
+			pass
+		_:
+			_check_update()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
