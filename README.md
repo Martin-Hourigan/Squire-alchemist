@@ -18,6 +18,14 @@ them over. (The turn-based slot/tile version is in ../Squire, untouched.)
   Slow = the slowed one hits for half, a turn per 2 s of slow.
   All turn numbers are in `data/fight.json` under "turns" (placeholders).
 
+## Direction (2026-11-23, not built)
+
+- The hero wears equipment in Diablo-style slots that you fill (not a
+  Backpack Battles grid).
+- Your cards aren't attacks or blocks: they're potions for the hero and their
+  gear, e.g. poison for the weapon, an enchantment for the shield, healing.
+- How brewing works: undecided.
+
 ## Phone
 
 Public repo github.com/Martin-Hourigan/Squire-alchemist; the APK is on the
