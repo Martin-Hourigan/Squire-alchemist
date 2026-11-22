@@ -1,5 +1,5 @@
 {
-	"_note": "Every number here is a PLACEHOLDER (2026-10-18) - tune freely.",
+	"_note": "Every number here is a PLACEHOLDER - tune freely.",
 	"hero": {
 		"asset": "knight_back",
 		"hp": 60,
@@ -27,21 +27,29 @@
 		"big_windup": 1.5
 	},
 	"effects": {
-		"_note": "side = who the potion goes to when this effect is FIRST in the flask (hero = handed over and drunk, enemy = thrown). Every effect then lands on that target.",
-		"heal": {"name": "Heal", "side": "hero", "fmt": "heal %d"},
-		"power": {"name": "Power", "side": "hero", "fmt": "special +%d"},
-		"damage": {"name": "Damage", "side": "enemy", "fmt": "%d damage"},
-		"slow": {"name": "Slow", "side": "enemy", "fmt": "slow %ds"}
+		"_note": "Every potion is for the hero and their gear. heal: HP back. ward: a shield enchantment that soaks up this much damage. venom: the weapon is coated for this many hits; each hit poisons. Poison: the enemy loses its poison in HP every tick, then poison goes down by 1.",
+		"heal": {"fmt": "heal %d"},
+		"ward": {"fmt": "shield ward %d"},
+		"venom": {"fmt": "venom %d hit(s)"}
 	},
-	"slow_factor": 0.5,
+	"venom_poison": 3,
+	"poison_tick": 2.0,
 	"ingredients": {
-		"_note": "main always counts (and stacks with copies); second only counts if a DIFFERENT ingredient in the flask has the same effect.",
-		"red": {"name": "Red", "col": "#c84a40", "main": ["heal", 8], "second": ["power", 15]},
-		"gold": {"name": "Gold", "col": "#d8b030", "main": ["power", 25], "second": ["heal", 6]},
-		"black": {"name": "Black", "col": "#6a6a78", "main": ["damage", 8], "second": ["slow", 3]},
-		"blue": {"name": "Blue", "col": "#4a7ad0", "main": ["slow", 4], "second": ["damage", 5]}
+		"_note": "One ingredient alone, or any mix that isn't a recipe, is an UNNAMED potion: just the ingredients' effects added up.",
+		"redcap": {"name": "Redcap", "col": "#c84a40", "fx": {"heal": 4}},
+		"ironbark": {"name": "Ironbark", "col": "#8a8f9a", "fx": {"ward": 4}},
+		"nightshade": {"name": "Nightshade", "col": "#7a4ab0", "fx": {"venom": 1}},
+		"honey": {"name": "Honey", "col": "#d8b030", "fx": {"heal": 2}}
 	},
-	"bag": ["red", "red", "red", "gold", "gold", "gold", "black", "black", "black", "blue", "blue", "blue"],
+	"recipes": {
+		"_note": "Exactly these three ingredients, any order. known = in the book at the start. Brewing one you don't know still works and puts it in the book; winning a fight teaches one more.",
+		"healing_draught": {"name": "Healing Draught", "ings": ["redcap", "redcap", "honey"], "fx": {"heal": 22}, "known": true},
+		"shield_oil": {"name": "Shield Oil", "ings": ["ironbark", "ironbark", "honey"], "fx": {"ward": 16}, "known": true},
+		"venom_oil": {"name": "Venom Oil", "ings": ["nightshade", "nightshade", "honey"], "fx": {"venom": 4}},
+		"iron_tonic": {"name": "Iron Tonic", "ings": ["redcap", "ironbark", "ironbark"], "fx": {"heal": 8, "ward": 12}},
+		"bitter_edge": {"name": "Bitter Edge", "ings": ["nightshade", "ironbark", "redcap"], "fx": {"venom": 2, "ward": 6, "heal": 6}}
+	},
+	"bag": ["redcap", "redcap", "redcap", "redcap", "ironbark", "ironbark", "ironbark", "ironbark", "nightshade", "nightshade", "nightshade", "honey", "honey", "honey"],
 	"hand_cap": 5,
 	"realtime": {
 		"_note": "No ingredients arrive on their own: you start with a full hand and REDRAW (replace your hand) whenever its meter is full.",
@@ -49,14 +57,13 @@
 		"redraw_fill": 15.0
 	},
 	"turns": {
-		"_note": "Your turn: brew and hand over, then END TURN. The hero attacks (an enemy that chose BLOCK stops the first hit), then the enemy does what it showed (the hero always blocks: hits land at hero_block). Slow: the slowed enemy hits for slow_factor, for 1 turn per slow_turn_secs.",
+		"_note": "Your turn: brew and hand over, then END TURN. The hero attacks (an enemy that chose BLOCK stops the first hit), then the enemy does what it showed (the hero always blocks: hits land at hero_block). Poison ticks once a turn, before the enemy acts.",
 		"start_hand": 5,
 		"draw_per_turn": 2,
 		"potions_per_turn": 1,
 		"redraw_turns": 3,
 		"hero_block": 0.5,
 		"power_per_turn": 6,
-		"slow_turn_secs": 2.0,
 		"enemy_block_chance": 0.25,
 		"beat": 0.7
 	},

@@ -4,9 +4,8 @@ extends SceneTree
 ##   godot --headless --path . --script res://tests/sim_test.gd
 ## idle = never brews; single = hands over every ingredient alone the moment
 ## it arrives; mix = throws whatever it holds into one flask (random order) -
-## shows what careless mixing costs; paired = brews matching pairs (red+gold
-## for the knight, black+blue at the brute), keeps red+gold+red in the low-HP
-## slot, redraws when it can.
+## shows what careless mixing costs; paired = brews recipes when it holds
+## them (Healing Draught kept in the low-HP slot), redraws when it holds none.
 
 const RUNS := 300
 const DT := 0.05
@@ -58,25 +57,34 @@ func _bot(f: Fight, bot: String) -> void:
 			pass
 		return
 	if bot == "mix":
-		if f.hand.size() >= 3:
+		if f.hand.size() >= 3 and f.potions_left() > 0:
 			f.hand.shuffle()
 			while f.add_to_flask(0):
 				pass
 			f.hand_over()
 		return
-	if f.redraw_ready() and f.hand.size() >= 3:
+	if f.redraw_ready() and f.hand.size() >= 3 and f.recipe_ids(f.d).all(func(r): return not _can(f, r)):
 		f.redraw()
-	if f.low_slot == null and _brew(f, ["red", "gold", "red"]):
+	if f.low_slot == null and _brew(f, f.d["recipes"]["healing_draught"]["ings"]):
 		f.to_low_slot()
-	if _brew(f, ["black", "blue"]):
+	for r in ["iron_tonic", "shield_oil", "venom_oil", "bitter_edge"]:
+		if _brew(f, f.d["recipes"][r]["ings"]):
+			f.hand_over()
+	if f.hero["hp"] < f.hero["max"] * 0.75 and _brew(f, f.d["recipes"]["healing_draught"]["ings"]):
 		f.hand_over()
-	if f.hero["hp"] < f.hero["max"] * 0.75 and _brew(f, ["red", "gold"]):
-		f.hand_over()
+
+
+func _can(f: Fight, r: String) -> bool:
+	var ids: Array = f.d["recipes"][r]["ings"]
+	for id in ids:
+		if f.hand.count(id) < ids.count(id):
+			return false
+	return true
 
 
 ## Put exactly these ingredients in the flask (in order) if the hand has them.
 func _brew(f: Fight, ids: Array) -> bool:
-	if not f.flask.is_empty():
+	if not f.flask.is_empty() or f.potions_left() <= 0:
 		return false
 	var need := {}
 	for id in ids:

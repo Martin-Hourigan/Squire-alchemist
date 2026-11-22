@@ -5,7 +5,8 @@ extends Node2D
 ## asset and frame (idle / attack).
 ## Left: the hero (HP, special power, potions handed over, low-HP slot).
 ## Right: your bag (draw pile, discard, REDRAW); in turns also END TURN.
-## Bottom: your hand of ingredients and the flask.
+## Bottom: your hand of ingredients and the flask (BOOK opens your recipes;
+## it pauses real time). The book is saved in user://book.json.
 ## Tap/click an ingredient to put it in the flask, a flask ingredient to take
 ## it back, then HAND OVER or LOW-HP SLOT. Keys: 1-5, Q, W, R, Space (end
 ## turn), Esc / phone back (menu).
@@ -22,10 +23,15 @@ const STONE := Color("#3a3631")
 const INK := Color("#f2ead6")
 const DIM := Color("#8a8478")
 const GOLD := Color("#c8a040")
+const GOOD := Color("#8ae08a")
+const BOOK_PATH := "user://book.json"
 
 var fight: Fight
 var data: Dictionary
 var screen := "menu"  # menu, fight
+var book := {}  # recipe id -> true
+var book_open := false
+var learned_now := ""  # recipe taught by the last win
 var mode := "realtime"
 var update_state := "idle"  # idle, checking, latest, new, failed, downloading, ready, download_failed
 var update_tag := ""
@@ -41,6 +47,7 @@ var _seed := 1
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	data = Fight.load_data()
+	_load_book()
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	var i := args.find("--seed")
 	if i >= 0 and i + 1 < args.size():
@@ -70,7 +77,9 @@ func _notification(what: int) -> void:
 
 func _new_fight() -> void:
 	fight = Fight.new()
-	fight.setup(data, _seed, mode)
+	fight.setup(data, _seed, mode, book)
+	learned_now = ""
+	book_open = false
 	_seed += 1
 	_floaters.clear()
 
@@ -79,7 +88,11 @@ func _process(dt: float) -> void:
 	if screen == "menu":
 		queue_redraw()
 		return
-	fight.step(dt)
+	var was := fight.outcome
+	if not book_open:
+		fight.step(dt)
+	if was == "" and fight.outcome == "won":
+		_teach_one()
 	for ev in fight.events:
 		_on_event(ev)
 	fight.events.clear()
@@ -108,26 +121,24 @@ func _on_event(ev: Dictionary) -> void:
 			var txt3 := "+%d HP" % int(ev["amount"])
 			if ev["wasted"] > 0.0:
 				txt3 += "  (%d wasted)" % int(ev["wasted"])
-			_float(txt3, _side_at(ev["on"]) + Vector2(0, -18), Color("#8ae08a"))
-		"power":
-			var txt4 := "+%d power" % int(ev["amount"])
-			if ev["on"] == "enemy":
-				txt4 = "power: no effect"
-			_float(txt4, _side_at(ev["on"]) + Vector2(0, -36), GOLD)
-		"slow":
-			_float("slowed %ds" % int(ev["amount"]), _side_at(ev["on"]) + Vector2(0, -54), Color("#7aa8ff"))
+			_float(txt3, hero_at + Vector2(0, -18), GOOD)
+		"ward":
+			_float("+%d shield ward" % int(ev["amount"]), hero_at + Vector2(0, -36), Color("#a0c0e0"))
+		"warded":
+			_float("ward soaks %d" % int(ev["amount"]), hero_at + Vector2(0, -20), Color("#a0c0e0"))
+		"venom":
+			_float("venom on the blade", hero_at + Vector2(0, -54), Color("#b080e0"))
+		"poisoned":
+			_float("+%d poison" % int(ev["amount"]), enemy_at + Vector2(0, -40), Color("#b080e0"))
+		"learned":
+			_float("NEW RECIPE: " + ev["text"], Vector2(WIN.get_center().x, WIN.position.y + 80), GOLD)
+			_save_book()
 		"use":
-			_float("the knight " + ev["text"], hero_at + Vector2(0, 20), INK)
+			_float("the knight uses " + ev["text"], hero_at + Vector2(0, 20), INK)
 		"enemy_block":
 			_float("blocked", enemy_at + Vector2(0, -20), Color("#c8c8d0"))
 		"windup":
 			_float(ev["text"] + "!", enemy_at + Vector2(0, -30), Color("#ff9a50"))
-
-
-func _side_at(side: String) -> Vector2:
-	if side == "enemy":
-		return _enemy_rect().get_center()
-	return _hero_rect().get_center() + Vector2(0, -40)
 
 
 func _float(text: String, pos: Vector2, col: Color) -> void:
@@ -142,11 +153,17 @@ func _unhandled_input(ev: InputEvent) -> void:
 			_menu_click(ev.position)
 		return
 	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		if book_open:
+			book_open = false
+			return
 		_click(ev.position)
 	elif ev is InputEventKey and ev.pressed and not ev.echo:
 		var k: int = ev.keycode
 		if k == KEY_ESCAPE:
 			screen = "menu"
+			return
+		if k == KEY_B:
+			book_open = not book_open
 			return
 		if fight.outcome != "":
 			if k == KEY_R or k == KEY_SPACE or k == KEY_ENTER:
@@ -174,6 +191,9 @@ func _menu_click(p: Vector2) -> void:
 		_start("turns")
 	elif _btn_update().has_point(p):
 		_update_tap()
+	elif _btn_forget().has_point(p):
+		book = Fight.starting_book(data)
+		_save_book()
 
 
 func _click(p: Vector2) -> void:
@@ -191,7 +211,9 @@ func _click(p: Vector2) -> void:
 		if _flask_slot(i).has_point(p):
 			fight.take_from_flask(i)
 			return
-	if _btn_hand_over().has_point(p):
+	if _btn_book().has_point(p):
+		book_open = true
+	elif _btn_hand_over().has_point(p):
 		fight.hand_over()
 	elif _btn_low().has_point(p):
 		fight.to_low_slot()
@@ -239,6 +261,14 @@ func _btn_menu() -> Rect2:
 	return Rect2(400, 350, 160, 44)
 
 
+func _btn_book() -> Rect2:
+	return Rect2(FLASK.position + Vector2(306, 8), Vector2(80, 30))
+
+
+func _btn_forget() -> Rect2:
+	return Rect2(800, 500, 146, 30)
+
+
 func _enemy_rect() -> Rect2:
 	var r := Rect2(WIN.get_center().x + 10, 84, 130, 160)
 	if fight.enemy["frame"] == "attack":
@@ -274,6 +304,8 @@ func _draw() -> void:
 		_text_c(f["pos"], f["text"], 15, Color(f["col"], a))
 	if fight.outcome != "":
 		_draw_outcome()
+	elif book_open:
+		_draw_book()
 
 
 func _draw_corridor() -> void:
@@ -352,9 +384,9 @@ func _draw_enemy() -> void:
 			pcol = Color("#c8c8d0")
 		if fight.phase == "you":
 			_text_c(Vector2(bar.get_center().x, bar.end.y + 22), "NEXT: " + plan, 15, pcol)
-		if e["slow"] > 0.0:
-			_text_c(Vector2(bar.get_center().x, bar.end.y + 40), "slowed %d turn%s" % [int(e["slow"]), "" if e["slow"] == 1.0 else "s"], 12, Color("#7aa8ff"))
-	elif e["winding"]:
+	if e["poison"] > 0:
+		_text_c(Vector2(bar.get_center().x - 130, bar.end.y - 2), "poison %d" % e["poison"], 12, Color("#b080e0"))
+	if fight.mode == "realtime" and e["winding"]:
 		var wd: float = float(data["enemy"]["big_windup"])
 		var wr := Rect2(WIN.get_center().x - 90, 54, 180, 10)
 		_bar(wr, 1.0 - e["wind_t"] / wd, Color("#ff9a50"))
@@ -390,17 +422,24 @@ func _draw_left() -> void:
 	_text(Vector2(x, y), "SPECIAL: %s (%d)" % [w_data["special"], int(w_data["special_dmg"])], 11, DIM)
 	_bar(Rect2(x, y + 4, w, 12), h["power"] / pmax, GOLD)
 	y += 30
+	var gear: Array = []
+	if h["ward"] > 0.0:
+		gear.append("shield ward %d" % int(h["ward"]))
+	if h["venom"] > 0:
+		gear.append("venom %d hit%s" % [h["venom"], "" if h["venom"] == 1 else "s"])
+	_text(Vector2(x, y), ", ".join(gear) if not gear.is_empty() else "shield, blade: plain", 11, Color("#b0a0e0") if not gear.is_empty() else DIM)
+	y += 20
 	if fight.mode == "turns":
 		_text(Vector2(x, y), "Attacks once a turn for %d" % int(data["hero"]["attack_dmg"]), 11, DIM)
-		_text(Vector2(x, y + 18), "Blocks: takes x%.1f" % float(data["turns"]["hero_block"]), 11, DIM)
+		_text(Vector2(x, y + 16), "Blocks: takes x%.1f" % float(data["turns"]["hero_block"]), 11, DIM)
 	else:
 		_text(Vector2(x, y), "Attacks every %.1fs for %d" % [float(data["hero"]["attack_every"]), int(data["hero"]["attack_dmg"])], 11, DIM)
-		y += 24
+		y += 20
 		_text(Vector2(x, y), "HANDED OVER (next chance)", 11, DIM)
 		y += 6
 		if fight.handed.is_empty():
 			_text(Vector2(x, y + 16), "-", 12, DIM)
-		for i in mini(fight.handed.size(), 4):
+		for i in mini(fight.handed.size(), 3):
 			_potion_row(Vector2(x, y + 4 + i * 20), fight.handed[i])
 	y = LEFT.position.y + 214
 	_text(Vector2(x, y), "LOW-HP SLOT (at %d HP)" % int(low), 11, Color("#ffd060"))
@@ -418,10 +457,10 @@ func _potion_row(p: Vector2, pot: Dictionary) -> void:
 	for id in pot["ings"]:
 		draw_circle(Vector2(cx, p.y + 7), 6, Color(data["ingredients"][id]["col"]))
 		cx += 14
-	_text(Vector2(p.x + 46, p.y + 12), _fx_text(pot["fx"]), 10, _side_col(pot["target"]))
+	_text(Vector2(p.x + 46, p.y + 12), _fx_text(pot["fx"]), 10, GOOD)
 
 
-## "heal 14, special +40" from {effect: amount}.
+## "heal 14, shield ward 6" from {effect: amount}.
 func _fx_text(fx: Dictionary) -> String:
 	var parts: Array = []
 	for e in Fight.EFFECTS:
@@ -432,12 +471,6 @@ func _fx_text(fx: Dictionary) -> String:
 
 func _fx_one(e: String, amount: float) -> String:
 	return String(data["effects"][e]["fmt"]) % int(amount)
-
-
-func _side_col(side: String) -> Color:
-	if side == "enemy":
-		return Color("#ffa060")
-	return Color("#8ae08a")
 
 
 func _draw_right() -> void:
@@ -482,9 +515,7 @@ func _draw_hand() -> void:
 		draw_circle(r.position + Vector2(r.size.x * 0.5, 54), 24, col)
 		draw_arc(r.position + Vector2(r.size.x * 0.5, 54), 24, 0, TAU, 32, col.lightened(0.3), 1.5)
 		_text_c(r.position + Vector2(r.size.x * 0.5, 100), ing["name"], 14, INK)
-		_text_c(r.position + Vector2(r.size.x * 0.5, 120), _fx_one(ing["main"][0], ing["main"][1]), 11,
-			_side_col(data["effects"][ing["main"][0]]["side"]))
-		_text_c(r.position + Vector2(r.size.x * 0.5, 138), "2nd: " + _fx_one(ing["second"][0], ing["second"][1]), 10, DIM)
+		_text_c(r.position + Vector2(r.size.x * 0.5, 122), _fx_text(_full(ing["fx"])), 11, GOOD)
 		var dim := not fight.can_add(i)
 		draw_rect(r, Color(col, 0.35 if dim else 0.9), false, 1.5)
 		if dim:
@@ -504,29 +535,21 @@ func _draw_flask() -> void:
 			var col := Color(data["ingredients"][fight.flask[i]]["col"])
 			draw_circle(r.get_center(), 20, col)
 	var brew := fight.flask_effects()
-	# second effects under each slot: lit when another ingredient matches
 	for i in fight.flask.size():
-		var ing: Dictionary = data["ingredients"][fight.flask[i]]
-		var on: bool = brew["second_on"][i]
-		var lbl := "2nd off"
-		if on:
-			lbl = "2nd ON"
-		_text_c(_flask_slot(i).get_center() + Vector2(0, 44), lbl, 10, Color("#8ae08a") if on else DIM)
+		_text_c(_flask_slot(i).get_center() + Vector2(0, 44), data["ingredients"][fight.flask[i]]["name"], 10, DIM)
 	var x := FLASK.position.x + 216
-	var y := FLASK.position.y + 46
-	if brew["target"] == "":
+	var y := FLASK.position.y + 60
+	if fight.flask.is_empty():
 		_text(Vector2(x, y), "empty", 13, DIM)
 	else:
-		var who := "drinks it  (the knight)"
-		if brew["target"] == "enemy":
-			who = "throws it  (at the brute)"
-		_text(Vector2(x, y), "-> " + who, 12, _side_col(brew["target"]))
+		var named: bool = brew["recipe"] != "" and fight.known.has(brew["recipe"])
+		_text(Vector2(x, y), brew["name"], 14, GOLD if named else INK)
 		y += 20
 		for e in Fight.EFFECTS:
 			if brew["fx"][e] > 0.0:
-				_text(Vector2(x, y), _fx_one(e, brew["fx"][e]), 13, INK)
+				_text(Vector2(x, y), _fx_one(e, brew["fx"][e]), 13, GOOD)
 				y += 17
-	_text(FLASK.position + Vector2(14, 130), "The FIRST ingredient decides who it's for; every effect lands there.", 10, DIM)
+	_button(_btn_book(), "BOOK", true)
 	_button(_btn_hand_over(), "HAND OVER  [Q]", fight.can_hand_over())
 	var slot_txt := "LOW-HP SLOT  [W]"
 	if fight.low_slot != null:
@@ -545,6 +568,8 @@ func _draw_outcome() -> void:
 	if won:
 		sub += "  ·  %d / %d HP left" % [int(ceil(fight.hero["hp"])), int(fight.hero["max"])]
 	_text_c(Vector2(480, 276), sub, 16, INK)
+	if learned_now != "":
+		_text_c(Vector2(480, 200), "New recipe for the book: " + learned_now, 15, GOLD)
 	_text_c(Vector2(480, 310), "tap for another fight", 13, DIM)
 	_button(_btn_menu(), "MENU", true)
 
@@ -556,6 +581,69 @@ func _draw_menu() -> void:
 	_button(_btn_mode(1), "TURN-BASED", true)
 	_button(_btn_update(), update_label(), update_state != "checking" and update_state != "downloading")
 	_text(Vector2(14, 528), "v" + Update.current(), 12, DIM)
+	_button(_btn_forget(), "FORGET RECIPES", true)
+	_text(Vector2(800, 492), "book: %d / %d" % [book.size(), Fight.recipe_ids(data).size()], 11, DIM)
+
+
+## Every effect, at zero if missing (for _fx_text).
+func _full(fx: Dictionary) -> Dictionary:
+	var out := {}
+	for e in Fight.EFFECTS:
+		out[e] = float(fx.get(e, 0.0))
+	return out
+
+
+# ── The book ─────────────────────────────────────────────────────────────────
+
+func _load_book() -> void:
+	book = Fight.starting_book(data)
+	if FileAccess.file_exists(BOOK_PATH):
+		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(BOOK_PATH))
+		if typeof(saved) == TYPE_ARRAY:
+			for id in saved:
+				if data["recipes"].has(id):
+					book[id] = true
+
+
+func _save_book() -> void:
+	var f := FileAccess.open(BOOK_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(book.keys()))
+
+
+## A win teaches one recipe you don't know yet (if any are left).
+func _teach_one() -> void:
+	var left := Fight.recipe_ids(data).filter(func(id): return not book.has(id))
+	if left.is_empty():
+		return
+	var id: String = left[randi() % left.size()]
+	book[id] = true
+	learned_now = String(data["recipes"][id]["name"])
+	_save_book()
+
+
+func _draw_book() -> void:
+	draw_rect(Rect2(0, 0, 960, 540), Color(0, 0, 0, 0.7))
+	var r := Rect2(150, 40, 660, 460)
+	_panel(r)
+	_text_c(Vector2(480, 76), "RECIPE BOOK", 22, GOLD)
+	var y := 116.0
+	for id in Fight.recipe_ids(data):
+		var rec: Dictionary = data["recipes"][id]
+		var cx := r.position.x + 30
+		if book.has(id):
+			_text(Vector2(cx, y), rec["name"], 15, INK)
+			var ix := cx + 170
+			for ing in rec["ings"]:
+				draw_circle(Vector2(ix, y - 5), 8, Color(data["ingredients"][ing]["col"]))
+				ix += 20
+			_text(Vector2(cx + 240, y), " + ".join(rec["ings"].map(func(i): return data["ingredients"][i]["name"])), 12, DIM)
+			_text(Vector2(cx + 240, y + 18), _fx_text(_full(rec["fx"])), 12, GOOD)
+		else:
+			_text(Vector2(cx, y), "? ? ?", 15, DIM)
+		y += 52
+	_text(Vector2(r.position.x + 30, r.end.y - 20), "Any other mix, or one ingredient alone: an unnamed potion, the ingredients added up.", 11, DIM)
+	_text_c(Vector2(480, r.end.y + 26), "tap to close", 12, DIM)
 
 
 # ── Updates ──────────────────────────────────────────────────────────────────
